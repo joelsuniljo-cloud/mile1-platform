@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Mile 1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="%%BASE%%/style.css">
+</head>
+<body>
+<div class="wrap" id="root"></div>
+<div class="ov" id="ov" hidden><div class="scrim" data-a="close"></div><aside class="sheet" id="sheet" role="dialog" aria-modal="true" aria-label="Editor"></aside></div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+(function(){
+const BASE='%%BASE%%';
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const PLATFORMS=['Instagram','LinkedIn','Facebook','YouTube Shorts'];
+const TYPES={post:'Post',carousel:'Carousel',reel:'Reel'};
+const STATUSES=[['idea','Idea'],['drafted','Drafted'],['review','With client'],['changes','Changes asked'],['approved','Approved'],['published','Published']];
+const LABELS={visual:'Visual brief',caption:'Caption',hashtags:'Hashtags',cta:'Call to action',hook:'Hook (first 3 seconds)',script:'Script',shots:'Shot list',onscreen:'On-screen text',videoPrompt:'AI video prompt'};
+const S={user:null,clients:[],items:[],comments:[],config:{},clientId:null,view:'calendar',editing:null,editClient:undefined,busy:null,stop:false,arm:null,loaded:false,pick:{},msg:{},notes:{},loginErr:'',loginEmail:''};
+
+/* ---------- helpers ---------- */
+const client=id=>S.clients.find(c=>c.id===id);
+const cur=()=>client(S.clientId);
+const pad=n=>String(n).padStart(2,'0');
+const ymd=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const parse=s=>new Date(s+'T00:00:00');
+const addDays=(s,n)=>{const d=parse(s);d.setDate(d.getDate()+n);return ymd(d)};
+const weekStart=s=>{const d=parse(s);const k=(d.getDay()+6)%7;d.setDate(d.getDate()-k);return ymd(d)};
+const nextMonday=()=>{const d=new Date();const add=((8-d.getDay())%7)||7;d.setDate(d.getDate()+add);return ymd(d)};
+const fmtDay=s=>{const d=parse(s);return {w:d.toLocaleDateString('en-IN',{weekday:'short'}),d:d.getDate(),full:d.toLocaleDateString('en-IN',{day:'numeric',month:'short'})}};
+const fmtAt=t=>new Date(t).toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+const hasText=c=>Object.values(c||{}).some(v=>String(v||'').trim());
+const byDate=(a,b)=>(a.date||'').localeCompare(b.date||'')||(a.created||0)-(b.created||0);
+const lbl=k=>(STATUSES.find(s=>s[0]===k)||[k,k])[1];
+let tt;
+function toast(m){const t=$('#toast');t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>{t.hidden=true},4500)}
+async function api(method,p,body){
+  const r=await fetch(BASE+p,{method,headers:{'content-type':'application/json','x-m1':'1'},credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body)});
+  let d={};try{d=await r.json()}catch(e){}
+  if(r.status===401&&p!=='/api/login'){S.user=null;S.loaded=true;render();throw {handled:true}}
+  if(!r.ok)throw new Error(d.error||'Something went wrong. Try again.');
+  return d;
+}
+const fail=e=>{if(!(e&&e.handled))toast(e&&e.message||'Something went wrong.')};
+const baseUrl=()=>(S.config.baseUrl&&/^https?:/.test(S.config.baseUrl))?S.config.baseUrl:location.origin+BASE;
+const reviewLink=c=>baseUrl()+'/r/'+c.token;
+const itemsOf=id=>S.items.filter(i=>i.clientId===id).sort(byDate);
+const cmsOf=id=>S.comments.filter(c=>c.itemId===id).sort((a,b)=>a.at-b.at);
+const pendingFor=itemId=>S.comments.filter(c=>c.itemId===itemId&&c.author==='client'&&c.kind==='change'&&!c.applied);
+const needsAction=id=>itemsOf(id).filter(i=>i.status==='changes').length;
+
+async function refresh(quiet){
+  try{
+    const d=await api('GET','/api/state');
+    Object.assign(S,{user:d.user,clients:d.clients,items:d.items,comments:d.comments,config:d.config,loaded:true});
+    if(!S.clientId||!client(S.clientId))S.clientId=S.clients[0]?S.clients[0].id:null;
+    render();
+  }catch(e){if(!quiet)fail(e);S.loaded=true;render()}
+}
+
+/* ---------- render ---------- */
+function render(){
+  const root=$('#root');
+  if(!S.loaded){root.innerHTML='<p class="muted" style="padding-block:32px">Loading…</p>';return}
+  if(!S.user){root.innerHTML=loginHTML();return}
+  root.innerHTML=topHTML()+mainHTML();
+}
+function loginHTML(){
+  return `<form class="login" id="loginForm"><div class="brand"><span class="sign" aria-hidden="true"><i>1</i></span><span class="bname">MILE <b>1</b></span></div>
+  <h1>Sign in</h1>
+  <label class="fld"><span>Email</span><input id="li-email" type="email" autocomplete="username" required value="${esc(S.loginEmail)}"></label>
+  <label class="fld"><span>Password</span><input id="li-pw" type="password" autocomplete="current-password" required></label>
+  ${S.loginErr?`<div class="banner warn" role="alert">${esc(S.loginErr)}</div>`:''}
+  <button class="btn pri" type="submit">Sign in</button></form>`;
+}
+function topHTML(){
+  return `<div class="top"><div class="brand"><span class="sign" aria-hidden="true"><i>1</i></span><span class="bname">MILE <b>1</b></span><span class="tagline">Content desk</span></div>
+  <nav class="chips" aria-label="Clients">${S.clients.map(c=>{const n=needsAction(c.id);return `<button class="chip ${c.id===S.clientId?'on':''}" data-a="client" data-id="${esc(c.id)}"><i class="dot" style="background:hsl(${c.hue||160} 55% 45%)"></i>${esc(c.name)}${n?`<span class="badge" title="Client comments waiting">${n}</span>`:''}</button>`}).join('')}<button class="chip add" data-a="new-client">+ Client</button></nav>
+  <div class="user"><span>${esc(S.user.email)}</span><a class="btn sm" href="${BASE}/api/export">Backup</a><button class="btn sm" data-a="password">Password</button><button class="btn sm" data-a="logout">Sign out</button></div></div>`;
+}
+function mainHTML(){
+  const c=cur();
+  if(!c)return `<div class="empty"><h1>Start with a client</h1>
+    <p>Every client goes through the same steps, so nothing slips between planning and posting.</p>
+    <ol><li>Write the client brief once: voice, audience, content pillars.</li><li>Generate a month of ideas as a calendar.</li><li>Draft posts and reels with AI.</li><li>Send for review. The client approves or comments.</li><li>Accept comments, AI revises, send again, then publish.</li></ol>
+    <button class="btn pri" data-a="new-client">Add your first client</button></div>`;
+  const its=itemsOf(c.id),n=k=>its.filter(i=>i.status===k).length,inbox=needsAction(c.id);
+  const briefOk=!!(c.voice&&c.pillars),draftable=its.filter(i=>i.status==='idea'&&!hasText(i.content)).length;
+  let h=`<div class="head"><div><h1>${esc(c.name)}</h1><div class="sub">${esc([c.industry,c.region,(c.platforms||[]).join(', ')].filter(Boolean).join(' · '))}</div></div>
+    <div class="acts"><button class="btn pri" data-a="gen-cal" ${S.busy?'disabled':''}>Generate calendar</button><button class="btn" data-a="new-item">Add item</button>
+    <button class="btn" data-a="draft-all" ${draftable&&!S.busy?'':'disabled'}>Draft all (${draftable})</button>
+    <a class="btn" href="${BASE}/api/clients/${esc(c.id)}/export.csv">Export CSV</a></div></div>`;
+  if(S.config.ai==='demo')h+=`<div class="banner warn">Demo AI: no AI key is set, so drafts are placeholders. Add AI_API_KEY in the server settings to turn on real AI.</div>`;
+  h+=`<ol class="flow"><li class="brief"><button data-a="view" data-v="brief"><span class="lbl">Brief</span><span class="n">${briefOk?'Ready':'Incomplete'}</span></button></li>`;
+  STATUSES.forEach(([k,l])=>{h+=`<li class="s-${k}"><button data-a="view" data-v="${k==='changes'?'inbox':k==='review'?'review':'pipeline'}"><span class="lbl">${l}</span><span class="n">${n(k)}</span></button></li>`});
+  h+=`</ol>`;
+  if(S.busy)h+=`<div class="banner" role="status"><span class="spin"></span><span>${esc(S.busy)}</span>${S.stopable?'<button class="btn sm" data-a="stop">Stop</button>':''}</div>`;
+  const tabs=[['calendar','Calendar'],['pipeline','Pipeline'],['review','Client review'],['inbox','Inbox'+(inbox?` (${inbox})`:'')],['brief','Brief']];
+  h+=`<div class="tabs" role="tablist">${tabs.map(([k,l])=>`<button class="tab ${S.view===k?'on':''}" role="tab" aria-selected="${S.view===k}" data-a="view" data-v="${k}">${l}</button>`).join('')}</div>`;
+  h+=S.view==='pipeline'?pipelineHTML(its):S.view==='brief'?briefHTML(c):S.view==='review'?reviewHTML(c,its):S.view==='inbox'?inboxHTML(c,its):calendarHTML(its);
+  return h;
+}
+function card(it,mini){
+  const pend=pendingFor(it.id).length;
+  return `<button class="item" data-a="open-item" data-id="${esc(it.id)}"><span class="itm-top"><span class="tag">${esc(it.platform)}</span><span class="tag">${esc(TYPES[it.type]||it.type)}</span>${it.revised?'<span class="tag">Revised</span>':''}${mini?'':`<span class="pill s-${esc(it.status)}">${esc(lbl(it.status))}</span>`}</span>
+  ${mini?`<span class="when">${esc(fmtDay(it.date).w+' '+fmtDay(it.date).full)}</span>`:''}
+  <span class="itm-topic">${esc(it.topic||'Untitled idea')}</span><span class="itm-pillar">${esc(it.pillar||'')}${pend?` · ${pend} client comment${pend>1?'s':''}`:''}</span></button>`;
+}
+function calendarHTML(its){
+  if(!its.length)return `<div class="bx"><h3>No content yet</h3><p>Use <b>Generate calendar</b> to plan the next weeks from the brief, or add a single item by hand.</p></div>`;
+  const weeks={};its.forEach(i=>{(weeks[weekStart(i.date)]=weeks[weekStart(i.date)]||[]).push(i)});
+  return Object.keys(weeks).sort().map(w=>{
+    const arr=weeks[w],days={};arr.forEach(i=>{(days[i.date]=days[i.date]||[]).push(i)});
+    return `<section class="week"><h3>Week of ${esc(fmtDay(w).full)} <span>${arr.length} item${arr.length>1?'s':''}</span></h3>${Object.keys(days).sort().map(d=>{const f=fmtDay(d);return `<div class="day"><div class="dt"><b>${f.d}</b>${f.w}</div><div class="cards">${days[d].map(i=>card(i)).join('')}</div></div>`}).join('')}</section>`;
+  }).join('');
+}
+function pipelineHTML(its){
+  return `<div class="board">${STATUSES.map(([k,l])=>{const arr=its.filter(i=>i.status===k);
+    return `<div class="col"><h3><span>${l}</span><span>${arr.length}</span></h3>${arr.length?arr.map(i=>`<div class="mini">${card(i,true)}${k==='drafted'&&hasText(i.content)?`<button class="btn sm" data-a="send-one" data-id="${esc(i.id)}">Send for review</button>`:''}${k==='approved'?`<button class="btn sm" data-a="publish" data-id="${esc(i.id)}">Mark published</button>`:''}${k==='changes'?`<button class="btn sm" data-a="view" data-v="inbox">Open inbox</button>`:''}</div>`).join(''):`<div class="none">Nothing here</div>`}</div>`}).join('')}</div>`;
+}
+function briefHTML(c){
+  const bx=(t,v)=>`<div class="bx"><h3>${t}</h3><p>${v&&String(v).trim()?esc(v):'<span class="muted">Not set</span>'}</p></div>`;
+  return `<div class="acts" style="margin-bottom:16px"><button class="btn pri" data-a="edit-client">Edit brief</button></div><div class="grid2">
+  ${bx('What they do',c.industry)}${bx('Market',c.region)}${bx('Audience',c.audience)}${bx('Brand voice',c.voice)}${bx('Content pillars',c.pillars)}${bx('Goals',c.goals)}${bx('Rules and notes',c.notes)}
+  ${bx('Rhythm',`${c.postsPerWeek||0} posts and ${c.reelsPerWeek||0} reels per week on ${(c.platforms||[]).join(', ')||'no platforms'}`)}
+  ${bx('Client contact',[c.contactName,c.contactEmail,c.contactPhone].filter(Boolean).join('\n'))}</div>`;
+}
+function defaultMessage(c,n){
+  return `Hi ${c.contactName||'there'}, ${n||'your'} ${n===1?'post is':'posts and reels are'} ready for your review. Open this link, then approve each one or tell us what to change:\n${reviewLink(c)}\n\nThanks,\nMile 1`;
+}
+function reviewHTML(c,its){
+  const ready=its.filter(i=>i.status==='drafted'&&hasText(i.content));
+  const out=its.filter(i=>i.status==='review');
+  const picked=i=>S.pick[i.id]!==false;
+  const nPick=ready.filter(picked).length;
+  const msg=S.msg[c.id]!==undefined?S.msg[c.id]:defaultMessage(c,out.length||nPick);
+  const phone=String(c.contactPhone||'').replace(/\D/g,'');
+  return `<div class="stack">
+  <div class="bx"><h3>Client review link</h3><p class="muted" style="margin-bottom:10px">One private link per client. They need no account. It shows only items you have sent.</p>
+    <div class="linkbox"><input id="rv-link" readonly value="${esc(reviewLink(c))}" aria-label="Client review link"><button class="btn" data-a="copy-link">Copy link</button><a class="btn" href="${esc(reviewLink(c))}" target="_blank" rel="noopener">Preview</a><button class="btn" data-a="regen" id="regen">Reset link</button></div></div>
+  <div class="bx"><h3>Ready to send (${ready.length})</h3>${ready.length?`<div class="list">${ready.map(i=>`<label class="rowitem"><input type="checkbox" data-pick="${esc(i.id)}" ${picked(i)?'checked':''}><span class="grow"><b>${esc(fmtDay(i.date).full)}</b> · ${esc(i.platform)} ${esc(TYPES[i.type])} · ${esc(i.topic)} ${i.revised?'<span class="tag">Revised</span>':''}</span><button class="btn sm" type="button" data-a="open-item" data-id="${esc(i.id)}">Open</button></label>`).join('')}</div>
+    <div class="acts" style="margin-top:12px"><button class="btn pri" data-a="send-picked" ${nPick&&!S.busy?'':'disabled'}>Send ${nPick} for review</button></div>`:`<p class="muted">Nothing is waiting. Draft items in the calendar, or revise items from the inbox. They appear here when ready.</p>`}</div>
+  <div class="bx"><h3>Tell the client (${out.length} with them now)</h3>
+    <label class="fld"><span>Message</span><textarea id="rv-msg" rows="5">${esc(msg)}</textarea></label>
+    <div class="acts" style="margin-top:10px"><a class="btn pri" id="wa" href="https://wa.me/${esc(phone)}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">WhatsApp</a>
+    <a class="btn" id="ml" href="mailto:${esc(c.contactEmail||'')}?subject=${encodeURIComponent('Content ready for your review')}&body=${encodeURIComponent(msg)}">Email app</a>
+    <button class="btn" data-a="copy-msg">Copy message</button>
+    ${S.config.mail?`<button class="btn" data-a="email-now" ${c.contactEmail?'':'disabled title="Add the client email in the brief"'}>Email from here</button>`:''}</div>
+    ${phone?'':'<p class="small muted" style="margin:8px 0 0">Add a phone number in the brief to open WhatsApp straight to this client.</p>'}</div>
+  <div class="bx"><h3>With the client now (${out.length})</h3>${out.length?`<div class="list">${out.map(i=>`<div class="rowitem"><span class="grow"><b>${esc(fmtDay(i.date).full)}</b> · ${esc(i.platform)} ${esc(TYPES[i.type])} · ${esc(i.topic)}</span><span class="pill s-review" style="margin:0">Round ${i.round||1}</span></div>`).join('')}</div>`:`<p class="muted">Nothing is out for review.</p>`}</div></div>`;
+}
+function inboxHTML(c,its){
+  const asks=its.filter(i=>i.status==='changes');
+  const revised=its.filter(i=>i.status==='drafted'&&i.revised);
+  const approvedFeed=S.comments.filter(x=>x.clientId===c.id&&x.kind==='approve').sort((a,b)=>b.at-a.at).slice(0,8);
+  let h='<div class="stack">';
+  h+=`<div><div class="sec-title">Needs your decision (${asks.length})</div>`;
+  h+=asks.length?asks.map(threadHTML).join(''):`<div class="bx"><p class="muted">No client comments are waiting. When a client asks for changes, they appear here.</p></div>`;
+  h+=`</div>`;
+  h+=`<div><div class="sec-title">Revised, ready to send again (${revised.length})</div>`;
+  h+=revised.length?`<div class="list">${revised.map(i=>`<div class="rowitem"><span class="grow"><b>${esc(fmtDay(i.date).full)}</b> · ${esc(i.platform)} ${esc(TYPES[i.type])} · ${esc(i.topic)}</span><button class="btn sm" data-a="open-item" data-id="${esc(i.id)}">Check</button><button class="btn pri sm" data-a="send-one" data-id="${esc(i.id)}">Send for review again</button></div>`).join('')}</div>`:`<div class="bx"><p class="muted">Items you revise with AI show up here so you can check them and resend.</p></div>`;
+  h+=`</div>`;
+  h+=`<div><div class="sec-title">Recently approved</div>`+(approvedFeed.length?`<div class="list">${approvedFeed.map(x=>{const it=S.items.find(i=>i.id===x.itemId);return `<div class="rowitem"><span class="grow">${esc(x.name)} approved <b>${esc(it?it.topic:'an item')}</b></span><span class="when">${esc(fmtAt(x.at))}</span></div>`}).join('')}</div>`:`<div class="bx"><p class="muted">Approvals appear here.</p></div>`)+`</div></div>`;
+  return h;
+}
+function threadHTML(it){
+  const all=cmsOf(it.id).filter(x=>x.kind!=='note'||true);
+  const pend=pendingFor(it.id);
+  const accepted=pend.filter(x=>x.triage==='accepted').length;
+  const history=all.filter(x=>!pend.includes(x));
+  return `<div class="thread"><div class="itm-top"><span class="tag">${esc(it.platform)}</span><span class="tag">${esc(TYPES[it.type])}</span><span class="tag">Round ${it.round||1}</span><b style="margin-left:6px;min-width:0;overflow-wrap:anywhere">${esc(it.topic)}</b><button class="btn sm" style="margin-left:auto" data-a="open-item" data-id="${esc(it.id)}">Open item</button></div>
+  ${pend.map(x=>`<div class="cm client"><div class="who">${esc(x.name)} · ${esc(fmtAt(x.at))}</div>
+    <div>${esc(x.text)}</div>
+    <div class="seg" role="group" aria-label="Decision"><button class="acc ${x.triage==='accepted'?'on':''}" data-a="triage" data-id="${esc(x.id)}" data-v="accepted">Accept</button><button class="ign ${x.triage==='ignored'?'on':''}" data-a="triage" data-id="${esc(x.id)}" data-v="ignored">Ignore</button></div>
+    ${x.triage==='accepted'?`<label class="fld"><span>Instruction for AI (you can edit)</span><textarea id="ag-${esc(x.id)}" rows="2" data-agency="${esc(x.id)}">${esc(x.agencyText!=null&&x.agencyText!==''?x.agencyText:x.text)}</textarea></label>`:''}</div>`).join('')}
+  <label class="fld"><span>Note to the client (optional)</span><textarea id="nt-${esc(it.id)}" rows="2" data-note="${esc(it.id)}" placeholder="Shown on their review page next to the new version">${esc(S.notes[it.id]||'')}</textarea></label>
+  <div class="acts"><button class="btn pri" data-a="apply" data-id="${esc(it.id)}" ${accepted&&!S.busy?'':'disabled'}>Revise with AI (${accepted} accepted)</button><button class="btn" data-a="resend" data-id="${esc(it.id)}" ${S.busy?'disabled':''}>Send again without changes</button></div>
+  ${history.length?`<details><summary class="small muted" style="cursor:pointer">Earlier conversation (${history.length})</summary><div class="stack" style="margin-top:8px">${history.map(cmHTML).join('')}</div></details>`:''}</div>`;
+}
+function cmHTML(x){
+  const who=x.author==='client'?x.name:(x.kind==='note'?'Internal note':'Mile 1');
+  const k={change:'asked for changes',approve:'approved',resolved:'update note',reply:'reply',note:''}[x.kind]||'';
+  return `<div class="cm ${x.author==='client'?'client':'agency'}"><div class="who">${esc(who)}${k?' · '+k:''} · ${esc(fmtAt(x.at))}${x.applied&&x.kind==='change'?' · addressed':''}</div><div style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(x.text)}</div></div>`;
+}
+
+/* ---------- sheet ---------- */
+const sheet=()=>$('#sheet');
+function openSheet(h){sheet().innerHTML=h;$('#ov').hidden=false;const f=sheet().querySelector('input,textarea,select');if(f)f.focus({preventScroll:true})}
+function closeSheet(){$('#ov').hidden=true;S.editing=null;S.editClient=undefined;S.arm=null}
+const fld=(l,id,body,hint)=>`<label class="fld" for="${id}"><span>${l}</span>${body}${hint?`<small>${hint}</small>`:''}</label>`;
+const inp=(k,v,t)=>`<input id="f-${k}" data-cf="${k}" type="${t||'text'}" value="${esc(v)}">`;
+const txt=(k,v,r)=>`<textarea id="f-${k}" data-cf="${k}" rows="${r||3}">${esc(v)}</textarea>`;
+function clientSheet(c){
+  c=c||{};const pl=c.platforms||['Instagram','LinkedIn'];
+  return `<div class="sh-head"><h2>${c.id?'Edit client brief':'New client'}</h2><button class="btn sm" data-a="close">Close</button></div><div class="sh-body">
+  ${fld('Client name','f-name',inp('name',c.name))}
+  ${fld('What they do','f-industry',txt('industry',c.industry,2),'One or two lines: product, price range, what makes them different.')}
+  <div class="row">${fld('Market or city','f-region',inp('region',c.region))}${fld('Audience','f-audience',inp('audience',c.audience))}</div>
+  ${fld('Brand voice','f-voice',txt('voice',c.voice,3),'Tone, words they use, words they never use.')}
+  ${fld('Content pillars','f-pillars',txt('pillars',c.pillars,4),'One per line. The calendar rotates through these.')}
+  ${fld('Goals','f-goals',txt('goals',c.goals,2))}
+  ${fld('Rules and notes','f-notes',txt('notes',c.notes,3),'Hashtags to always use, topics to avoid.')}
+  <div class="fld"><span>Platforms</span><div class="checks">${PLATFORMS.map(p=>`<label><input type="checkbox" id="p-${p.replace(/\W/g,'')}" data-cp="${p}" ${pl.includes(p)?'checked':''}>${p}</label>`).join('')}</div></div>
+  <div class="row">${fld('Posts per week (incl. carousels)','f-postsPerWeek',inp('postsPerWeek',c.postsPerWeek==null?3:c.postsPerWeek,'number'))}${fld('Reels per week','f-reelsPerWeek',inp('reelsPerWeek',c.reelsPerWeek==null?2:c.reelsPerWeek,'number'))}</div>
+  <div class="sec"><h3>Client contact (for review links)</h3><div class="row">${fld('Contact name','f-contactName',inp('contactName',c.contactName))}${fld('Phone (with country code)','f-contactPhone',inp('contactPhone',c.contactPhone))}</div>${fld('Email','f-contactEmail',inp('contactEmail',c.contactEmail,'email'))}</div>
+  </div><div class="sh-foot"><button class="btn pri" data-a="save-client">${c.id?'Save brief':'Add client'}</button><button class="btn" data-a="close">Cancel</button>${c.id?`<button class="btn danger" data-a="del-client" style="margin-left:auto">Delete client</button>`:''}</div>`;
+}
+function calSheet(c){
+  return `<div class="sh-head"><h2>Generate calendar</h2><button class="btn sm" data-a="close">Close</button></div><div class="sh-body">
+  <p class="muted" style="margin:0">Plans ideas for ${esc(c.name)} from the brief. Each idea starts as an Idea you can edit, draft, or delete.</p>
+  <div class="row">${fld('Start date','g-start',`<input id="g-start" data-g="start" type="date" value="${nextMonday()}">`)}
+  ${fld('Weeks','g-weeks',`<select id="g-weeks" data-g="weeks">${[1,2,3,4].map(n=>`<option value="${n}" ${n===4?'selected':''}>${n}</option>`).join('')}</select>`)}</div>
+  <div class="row">${fld('Posts per week','g-posts',`<input id="g-posts" data-g="posts" type="number" min="0" max="7" value="${c.postsPerWeek==null?3:c.postsPerWeek}">`)}
+  ${fld('Reels per week','g-reels',`<input id="g-reels" data-g="reels" type="number" min="0" max="7" value="${c.reelsPerWeek==null?2:c.reelsPerWeek}">`)}</div>
+  ${fld('Focus for this period','g-focus',`<textarea id="g-focus" data-g="focus" rows="3" placeholder="e.g. Diwali offers, new menu launch, hiring push"></textarea>`,'Optional. Festivals and key dates for the market are added when they fit.')}
+  </div><div class="sh-foot"><button class="btn pri" data-a="run-cal">Generate</button><button class="btn" data-a="close">Cancel</button></div>`;
+}
+function passwordSheet(){
+  return `<div class="sh-head"><h2>Change password</h2><button class="btn sm" data-a="close">Close</button></div><div class="sh-body">
+  ${fld('Current password','pw-cur',`<input id="pw-cur" data-pw="current" type="password" autocomplete="current-password">`)}
+  ${fld('New password','pw-new',`<input id="pw-new" data-pw="next" type="password" autocomplete="new-password">`,'At least 10 characters.')}
+  </div><div class="sh-foot"><button class="btn pri" data-a="save-pw">Save password</button><button class="btn" data-a="close">Cancel</button></div>`;
+}
+function itemSheet(e){
+  const c=e.content||{},cl=client(e.clientId)||{};
+  const plats=[...new Set([...(cl.platforms||PLATFORMS),e.platform].filter(Boolean))];
+  const area=(k,r,hint)=>fld(LABELS[k],'f-c-'+k,`<textarea id="f-c-${k}" data-f="c.${k}" rows="${r}">${esc(c[k]||'')}</textarea>`,hint);
+  const t=e.type;let body='';
+  if(t==='reel')body=area('hook',2)+area('script',7,'Spoken lines and beats with rough timestamps.')+area('shots',6,'One shot per line.')+area('onscreen',3,'One overlay per line.')+area('videoPrompt',5,'Paste into your AI video tool.')+area('caption',5)+area('hashtags',2)+area('cta',2);
+  else if(t==='carousel')body=area('visual',7,'One slide per line.')+area('caption',5)+area('hashtags',2)+area('cta',2);
+  else body=area('visual',4,'Image or design brief.')+area('caption',6)+area('hashtags',2)+area('cta',2);
+  const hist=(e.history||[]).map((h,i)=>{const s=h.content.caption||h.content.hook||h.content.visual||'';return `<div><span>${esc(fmtAt(h.at))} · ${esc(s.slice(0,70))}</span><button class="btn sm" data-a="restore" data-i="${i}">Restore</button></div>`}).join('');
+  const cms=e.id?cmsOf(e.id):[];
+  const canSend=e.id&&hasText(c)&&['drafted','idea','changes'].includes(e.status);
+  return `<div class="sh-head"><h2>${e.id?'Edit item':'New item'}</h2><span class="pill s-${esc(e.status)}" style="margin:0">${esc(lbl(e.status))}</span><button class="btn sm" data-a="close">Close</button></div><div class="sh-body">
+  <div class="row">${fld('Date','f-date',`<input id="f-date" data-f="date" type="date" value="${esc(e.date)}">`)}
+  ${fld('Platform','f-platform',`<select id="f-platform" data-f="platform">${plats.map(p=>`<option ${p===e.platform?'selected':''}>${esc(p)}</option>`).join('')}</select>`)}
+  ${fld('Format','f-type',`<select id="f-type" data-f="type">${Object.entries(TYPES).map(([k,l])=>`<option value="${k}" ${k===t?'selected':''}>${l}</option>`).join('')}</select>`)}
+  ${fld('Status','f-status',`<select id="f-status" data-f="status">${STATUSES.filter(s=>s[0]!=='review').map(([k,l])=>`<option value="${k}" ${k===e.status?'selected':''}>${l}</option>`).join('')}${e.status==='review'?'<option value="review" selected>With client</option>':''}</select>`,e.status==='review'?'Use Send for review to change what the client sees.':'')}</div>
+  ${fld('Content pillar','f-pillar',`<input id="f-pillar" data-f="pillar" value="${esc(e.pillar)}">`)}
+  ${fld('Topic','f-topic',`<textarea id="f-topic" data-f="topic" rows="2">${esc(e.topic)}</textarea>`)}
+  <div class="ai"><div id="aimsg">${hasText(c)?'Ask for a change, or redraft from scratch.':'Draft this item from the client brief.'}</div>
+  <textarea id="f-ask" rows="2" aria-label="Change request" placeholder="e.g. Shorter caption, stronger hook, add a Diwali angle"></textarea>
+  <div class="acts"><button class="btn pri" data-a="ai-revise" ${hasText(c)?'':'disabled'}>Apply change with AI</button><button class="btn" data-a="ai-draft">${hasText(c)?'Redraft':'Draft with AI'}</button></div></div>
+  <div class="sec"><h3>${esc(TYPES[t])} content</h3>${body}</div>
+  ${e.id?`<div class="sec"><h3>Conversation with client</h3>${cms.length?cms.map(cmHTML).join(''):'<p class="muted" style="margin:0">No comments yet.</p>'}
+    <textarea id="f-reply" rows="2" aria-label="Write a comment" placeholder="Write a reply for the client, or an internal note"></textarea>
+    <div class="acts"><button class="btn sm" data-a="reply" data-kind="reply">Reply to client</button><button class="btn sm" data-a="reply" data-kind="note">Save internal note</button></div></div>`:''}
+  ${hist?`<div class="sec"><h3>Earlier versions</h3><div class="hist">${hist}</div></div>`:''}
+  </div><div class="sh-foot"><button class="btn pri" data-a="save-item">Save</button>${canSend?`<button class="btn" data-a="send-item">Save and send for review</button>`:''}<button class="btn" data-a="copy">Copy caption</button>${e.id?`<button class="btn danger" data-a="del-item" style="margin-left:auto">Delete</button>`:''}</div>`;
+}
+function setAiBusy(on,msg){
+  sheet().querySelectorAll('.ai .btn,.sh-foot .btn').forEach(b=>b.disabled=on);
+  const m=$('#aimsg');if(m&&msg)m.textContent=msg;
+}
+
+/* ---------- actions ---------- */
+function collect(){
+  const o={c:{}};
+  sheet().querySelectorAll('[data-f]').forEach(el=>{const k=el.dataset.f;if(k.startsWith('c.'))o.c[k.slice(2)]=el.value;else o[k]=el.value});
+  return o;
+}
+async function saveItem(){
+  const f=collect(),e=S.editing;
+  const body={date:f.date||e.date,platform:f.platform||e.platform,type:f.type||e.type,pillar:f.pillar==null?e.pillar:f.pillar,topic:f.topic==null?e.topic:f.topic,content:f.c};
+  if(f.status&&f.status!==e.status&&f.status!=='review')body.status=f.status;
+  let it;
+  if(e.id)it=await api('PUT','/api/items/'+e.id,body);
+  else it=await api('POST','/api/items',{...body,clientId:e.clientId});
+  S.editing=JSON.parse(JSON.stringify(it));await refresh(true);
+  return it;
+}
+async function runAI(instr){
+  const e=S.editing;setAiBusy(true,'Saving, then thinking…');
+  try{
+    const it=await saveItem();
+    setAiBusy(true,'Thinking…');
+    const r=await api('POST','/api/items/'+it.id+'/draft',{instruction:instr||''});
+    S.editing=JSON.parse(JSON.stringify(r.item));await refresh(true);
+    openSheet(itemSheet(S.editing));toast('Draft updated. The earlier version is kept under Earlier versions.');
+  }catch(err){setAiBusy(false,'Draft with AI, or ask for a change.');fail(err)}
+}
+const H={};
+H.client=t=>{S.clientId=t.dataset.id;render()};
+H.view=t=>{S.view=t.dataset.v;render()};
+H.close=()=>closeSheet();
+H.logout=async()=>{try{await api('POST','/api/logout',{})}catch(e){}S.user=null;render()};
+H.password=()=>openSheet(passwordSheet());
+H['save-pw']=async()=>{const o={};sheet().querySelectorAll('[data-pw]').forEach(el=>{o[el.dataset.pw]=el.value});try{await api('POST','/api/password',o);closeSheet();toast('Password changed.')}catch(e){fail(e)}};
+H['new-client']=()=>{S.editClient=null;S.arm=null;openSheet(clientSheet({}))};
+H['edit-client']=()=>{S.editClient=cur();S.arm=null;openSheet(clientSheet(cur()))};
+H['save-client']=async()=>{
+  const g={};sheet().querySelectorAll('[data-cf]').forEach(el=>{g[el.dataset.cf]=el.value.trim()});
+  g.platforms=[...sheet().querySelectorAll('[data-cp]:checked')].map(el=>el.dataset.cp);
+  try{
+    if(S.editClient&&S.editClient.id)await api('PUT','/api/clients/'+S.editClient.id,g);
+    else{const c=await api('POST','/api/clients',g);S.clientId=c.id;S.view='brief'}
+    closeSheet();await refresh(true);toast('Client saved.');
+  }catch(e){fail(e)}
+};
+H['del-client']=async t=>{
+  const c=S.editClient;if(!c)return;
+  if(S.arm!=='client'){S.arm='client';t.textContent='Click again to delete client and all content';return}
+  try{await api('DELETE','/api/clients/'+c.id);closeSheet();S.clientId=null;await refresh(true);toast('Client deleted.')}catch(e){fail(e)}
+};
+H['gen-cal']=()=>openSheet(calSheet(cur()));
+H['run-cal']=async()=>{
+  const f={};sheet().querySelectorAll('[data-g]').forEach(el=>{f[el.dataset.g]=el.value});
+  const c=cur();closeSheet();S.busy=`Planning ${f.weeks} week${f.weeks>1?'s':''} for ${c.name}…`;S.stopable=false;render();
+  try{const r=await api('POST','/api/clients/'+c.id+'/calendar',f);S.view='calendar';toast(`Added ${r.added} ideas to the calendar.`)}
+  catch(e){fail(e)}finally{S.busy=null;await refresh(true)}
+};
+H['new-item']=()=>{
+  const c=cur();
+  S.editing={id:null,clientId:c.id,date:addDays(ymd(new Date()),1),platform:(c.platforms||['Instagram'])[0],type:'post',pillar:'',topic:'',status:'idea',content:{},history:[]};
+  openSheet(itemSheet(S.editing));
+};
+H['open-item']=async t=>{
+  const it=S.items.find(i=>i.id===t.dataset.id);if(!it)return;
+  S.editing=JSON.parse(JSON.stringify(it));S.editing.content=S.editing.content||{};S.editing.history=S.editing.history||[];
+  openSheet(itemSheet(S.editing));
+  if(pendingFor(it.id).length||S.comments.some(c=>c.itemId===it.id&&c.author==='client'&&!c.seen)){api('POST','/api/items/'+it.id+'/seen',{}).then(()=>refresh(true)).catch(()=>{})}
+};
+H['save-item']=async()=>{try{await saveItem();closeSheet();toast('Saved.')}catch(e){fail(e)}};
+H['send-item']=async()=>{
+  try{const it=await saveItem();await api('POST','/api/items/'+it.id+'/send',{});closeSheet();S.view='review';await refresh(true);toast('Sent for review. Share the link with the client below.')}catch(e){fail(e)}
+};
+H['send-one']=async t=>{try{await api('POST','/api/items/'+t.dataset.id+'/send',{});S.view='review';await refresh(true);toast('Sent for review. Share the link with the client.')}catch(e){fail(e)}};
+H['send-picked']=async()=>{
+  const c=cur(),ready=itemsOf(c.id).filter(i=>i.status==='drafted'&&hasText(i.content)&&S.pick[i.id]!==false);
+  S.busy='Sending…';render();
+  try{for(const i of ready)await api('POST','/api/items/'+i.id+'/send',{});S.msg[c.id]=undefined;toast(`${ready.length} item${ready.length>1?'s':''} sent. Now share the link with the client.`)}
+  catch(e){fail(e)}finally{S.busy=null;await refresh(true)}
+};
+H.publish=async t=>{try{await api('PUT','/api/items/'+t.dataset.id,{status:'published'});await refresh(true)}catch(e){fail(e)}};
+H['ai-draft']=()=>runAI('');
+H['ai-revise']=()=>{const v=($('#f-ask').value||'').trim();if(!v){toast('Describe the change you want first.');return}runAI(v)};
+H.restore=async t=>{
+  try{await saveItem();const it=await api('POST','/api/items/'+S.editing.id+'/restore',{index:+t.dataset.i});S.editing=JSON.parse(JSON.stringify(it));await refresh(true);openSheet(itemSheet(S.editing));toast('Earlier version restored.')}catch(e){fail(e)}
+};
+H['del-item']=async t=>{
+  if(S.arm!=='item'){S.arm='item';t.textContent='Click again to delete';return}
+  try{await api('DELETE','/api/items/'+S.editing.id);closeSheet();await refresh(true);toast('Deleted.')}catch(e){fail(e)}
+};
+H.reply=async t=>{
+  const v=($('#f-reply').value||'').trim();if(!v){toast('Write something first.');return}
+  try{await saveItem();await api('POST','/api/items/'+S.editing.id+'/comments',{text:v,kind:t.dataset.kind});await refresh(true);openSheet(itemSheet(S.editing));toast(t.dataset.kind==='reply'?'Reply added. The client sees it on their page.':'Note saved.')}catch(e){fail(e)}
+};
+H.copy=async()=>{
+  const el=sheet().querySelector('[data-f="c.caption"]');if(!el)return;
+  const h=sheet().querySelector('[data-f="c.hashtags"]');const text=el.value+(h?'\n\n'+h.value:'');
+  try{await navigator.clipboard.writeText(text.trim());toast('Caption copied.')}catch(e){el.focus();el.select();toast('Select and copy the caption manually.')}
+};
+H['copy-link']=async()=>{const el=$('#rv-link');try{await navigator.clipboard.writeText(el.value);toast('Link copied.')}catch(e){el.select();toast('Select and copy the link.')}};
+H['copy-msg']=async()=>{const el=$('#rv-msg');try{await navigator.clipboard.writeText(el.value);toast('Message copied.')}catch(e){el.select();toast('Select and copy the message.')}};
+H.regen=async t=>{
+  if(S.arm!=='regen'){S.arm='regen';t.textContent='Click again: old link stops working';return}
+  S.arm=null;try{await api('POST','/api/clients/'+S.clientId+'/regen-link',{});await refresh(true);toast('New link created. The old one no longer works.')}catch(e){fail(e)}
+};
+H['email-now']=async()=>{const c=cur();try{await api('POST','/api/clients/'+c.id+'/email',{message:$('#rv-msg').value});toast('Email sent to '+c.contactEmail+'.')}catch(e){fail(e)}};
+H.triage=async t=>{
+  const c=S.comments.find(x=>x.id===t.dataset.id);if(!c)return;
+  const v=c.triage===t.dataset.v?null:t.dataset.v;
+  try{await api('PUT','/api/comments/'+c.id,{triage:v});await refresh(true)}catch(e){fail(e)}
+};
+H.apply=async t=>{
+  const id=t.dataset.id,note=($('#nt-'+id)||{}).value||'';
+  S.busy='Revising with your accepted comments…';S.stopable=false;render();
+  try{await api('POST','/api/items/'+id+'/apply',{note});toast('Revised. Check it below, then send it for review again.')}
+  catch(e){fail(e)}finally{S.busy=null;await refresh(true)}
+};
+H.resend=async t=>{
+  const id=t.dataset.id,note=($('#nt-'+id)||{}).value||'';
+  try{await api('POST','/api/items/'+id+'/resend',{note});toast('Sent again. The client sees it on their link.');await refresh(true)}catch(e){fail(e)}
+};
+H['draft-all']=async()=>{
+  const c=cur(),todo=itemsOf(c.id).filter(i=>i.status==='idea'&&!hasText(i.content));
+  if(!todo.length){toast('Nothing left to draft.');return}
+  S.stop=false;S.stopable=true;let n=0;
+  for(const it of todo){
+    if(S.stop)break;
+    S.busy=`Drafting ${++n} of ${todo.length}…`;render();
+    try{await api('POST','/api/items/'+it.id+'/draft',{instruction:''});await refresh(true)}catch(e){fail(e);break}
+  }
+  S.busy=null;S.stopable=false;await refresh(true);
+};
+H.stop=()=>{S.stop=true;toast('Stopping after this item.')};
+
+document.addEventListener('click',e=>{
+  const t=e.target.closest('[data-a]');if(!t||t.disabled)return;
+  const h=H[t.dataset.a];if(!h)return;
+  Promise.resolve().then(()=>h(t,e)).catch(fail);
+});
+document.addEventListener('submit',async e=>{
+  if(e.target.id!=='loginForm')return;
+  e.preventDefault();
+  S.loginEmail=$('#li-email').value;
+  try{await api('POST','/api/login',{email:S.loginEmail,password:$('#li-pw').value});S.loginErr='';S.loaded=false;render();await refresh()}
+  catch(err){S.loginErr=err.message;render();}
+});
+document.addEventListener('change',e=>{
+  const el=e.target,d=el.dataset||{};
+  if(d.f==='type'&&S.editing){
+    const f=collect();Object.assign(S.editing,{date:f.date,platform:f.platform,type:f.type,pillar:f.pillar,topic:f.topic});
+    S.editing.content={...S.editing.content,...f.c};openSheet(itemSheet(S.editing));
+  }
+  if(d.pick){S.pick[d.pick]=el.checked;render()}
+  if(d.agency){api('PUT','/api/comments/'+d.agency,{text:el.value}).then(()=>refresh(true)).catch(fail)}
+});
+document.addEventListener('input',e=>{
+  if(e.target.dataset&&e.target.dataset.note)S.notes[e.target.dataset.note]=e.target.value;
+  if(e.target.id==='rv-msg'){
+    const c=cur();S.msg[c.id]=e.target.value;
+    const wa=$('#wa'),ml=$('#ml'),phone=String(c.contactPhone||'').replace(/\D/g,'');
+    if(wa)wa.href='https://wa.me/'+phone+'?text='+encodeURIComponent(e.target.value);
+    if(ml)ml.href='mailto:'+(c.contactEmail||'')+'?subject='+encodeURIComponent('Content ready for your review')+'&body='+encodeURIComponent(e.target.value);
+  }
+});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#ov').hidden)closeSheet()});
+
+/* typing in inbox boxes must not be wiped by the background refresh */
+const typing=()=>{const a=document.activeElement;return !!a&&(a.tagName==='TEXTAREA'||a.tagName==='INPUT')};
+/* Cheap check every 30 seconds: only reload everything when something changed. */
+let lastV=null;
+async function poll(){
+  try{
+    const r=await fetch(BASE+'/api/version',{credentials:'same-origin'});const v=(await r.json()).v;
+    if(lastV===null){lastV=v;return}
+    if(v!==lastV){if(typing()||!$('#ov').hidden||S.busy)return;lastV=v;await refresh(true)}
+  }catch(e){}
+}
+setInterval(()=>{if(document.visibilityState==='visible'&&S.user)poll()},30000);
+refresh(true).then(poll);
+})();
+</script>
+</body>
+</html>
