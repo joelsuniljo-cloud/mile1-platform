@@ -1,0 +1,15 @@
+{
+  "name": "mile1-platform",
+  "version": "1.0.0",
+  "description": "Mile 1 content desk: client briefs, AI content calendar, post and reel drafts, client review and AI revisions.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js && node test-ai.js && node test-redis.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
