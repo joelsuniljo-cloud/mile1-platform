@@ -1,0 +1,9 @@
+{
+  "functions": {
+    "api/index.js": { "includeFiles": "public/**", "maxDuration": 60 }
+  },
+  "rewrites": [
+    { "source": "/platform", "destination": "/api/index?p=/" },
+    { "source": "/platform/:path*", "destination": "/api/index?p=/:path*" }
+  ]
+}
